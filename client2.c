@@ -54,7 +54,11 @@ static void app(const char *address, const char *name)
       /* something from standard input : i.e keyboard */
       if(FD_ISSET(STDIN_FILENO, &rdfs))
       {
-         fgets(buffer, BUF_SIZE - 1, stdin);
+         /* end of input (Ctrl+D) : we leave instead of sending the last line again and again */
+         if(fgets(buffer, BUF_SIZE - 1, stdin) == NULL)
+         {
+            break;
+         }
          {
             char *p = NULL;
             p = strstr(buffer, "\n");

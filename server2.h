@@ -33,6 +33,12 @@ typedef struct in_addr IN_ADDR;
 
 #define BUF_SIZE    1024
 
+/* MSG_NOSIGNAL : empêche send() de tuer le serveur (SIGPIPE) quand un client est déjà parti.
+   Il n'existe pas sous Windows, où on le remplace par 0 (sans effet). */
+#ifndef MSG_NOSIGNAL
+#define MSG_NOSIGNAL 0
+#endif
+
 typedef struct
 {
    SOCKET sock;
@@ -49,5 +55,7 @@ static void write_client(SOCKET sock, const char *buffer);
 static void send_message_to_all_clients(Client *clients, Client client, int actual, const char *buffer, char from_server);
 static void remove_client(Client *clients, int to_remove, int *actual);
 static void clear_clients(Client *clients, int actual);
+static const char *erreur_pseudo(const Client *clients, int actual, const char *pseudo);
+static void traiter_commande(Client *clients, int actual, int index, const char *commande);
 
 #endif /* guard */

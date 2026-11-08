@@ -78,10 +78,28 @@ static void app(void)
             continue;
          }
 
+         /* no room left : we tell the client and hang up */
+         if(actual == MAX_CLIENTS)
+         {
+            write_client(csock, "ERREUR : serveur plein");
+            closesocket(csock);
+            continue;
+         }
+
          /* after connecting the client sends its name */
-         if(read_client(csock, buffer) == -1)
+         if(read_client(csock, buffer) == 0)
          {
             /* disconnected */
+            closesocket(csock);
+            continue;
+         }
+
+         /* the name must be valid and not already used */
+         const char *erreur = erreur_pseudo(clients, actual, buffer);
+         if(erreur != NULL)
+         {
+            write_client(csock, erreur);
+            closesocket(csock);
             continue;
          }
 
@@ -94,6 +112,11 @@ static void app(void)
          strncpy(c.name, buffer, BUF_SIZE - 1);
          clients[actual] = c;
          actual++;
+
+         write_client(csock, "Bienvenue ! Commandes disponibles : /list");
+         strncpy(buffer, c.name, BUF_SIZE - 1);
+         strncat(buffer, " joined !", BUF_SIZE - strlen(buffer) - 1);
+         send_message_to_all_clients(clients, c, actual, buffer, 1);
       }
       else
       {
@@ -113,6 +136,11 @@ static void app(void)
                   strncpy(buffer, client.name, BUF_SIZE - 1);
                   strncat(buffer, " disconnected !", BUF_SIZE - strlen(buffer) - 1);
                   send_message_to_all_clients(clients, client, actual, buffer, 1);
+               }
+               else if(buffer[0] == '/')
+               {
+                  /* a command, the answer goes to this client only */
+                  traiter_commande(clients, actual, i, buffer);
                }
                else
                {
@@ -149,20 +177,62 @@ static void send_message_to_all_clients(Client *clients, Client sender, int actu
 {
    int i = 0;
    char message[BUF_SIZE];
-   message[0] = 0;
    for(i = 0; i < actual; i++)
    {
       /* we don't send message to the sender */
       if(sender.sock != clients[i].sock)
       {
+         /* the message is rebuilt for each receiver */
+         message[0] = 0;
          if(from_server == 0)
          {
-            strncpy(message, sender.name, BUF_SIZE - 1);
+            strncat(message, sender.name, sizeof message - 1);
             strncat(message, " : ", sizeof message - strlen(message) - 1);
          }
          strncat(message, buffer, sizeof message - strlen(message) - 1);
          write_client(clients[i].sock, message);
       }
+   }
+}
+
+/* returns NULL if the name is acceptable, otherwise the message to send to the client */
+static const char *erreur_pseudo(const Client *clients, int actual, const char *pseudo)
+{
+   int i = 0;
+   /* no space : later commands will be split on spaces */
+   if(strchr(pseudo, ' ') != NULL)
+   {
+      return "ERREUR : le pseudo ne doit pas contenir d'espace";
+   }
+   for(i = 0; i < actual; i++)
+   {
+      if(strcmp(clients[i].name, pseudo) == 0)
+      {
+         return "ERREUR : pseudo déjà pris";
+      }
+   }
+   return NULL;
+}
+
+static void traiter_commande(Client *clients, int actual, int index, const char *commande)
+{
+   char message[BUF_SIZE];
+   int i = 0;
+
+   if(strcmp(commande, "/list") == 0)
+   {
+      message[0] = 0;
+      strncat(message, "Joueurs en ligne :", sizeof message - 1);
+      for(i = 0; i < actual; i++)
+      {
+         strncat(message, " ", sizeof message - strlen(message) - 1);
+         strncat(message, clients[i].name, sizeof message - strlen(message) - 1);
+      }
+      write_client(clients[index].sock, message);
+   }
+   else
+   {
+      write_client(clients[index].sock, "Commande inconnue. Commandes disponibles : /list");
    }
 }
 
@@ -176,6 +246,11 @@ static int init_connection(void)
       perror("socket()");
       exit(errno);
    }
+
+   /* lets us restart the server right away : without it bind() fails with "Address already
+      in use" while connections of the previous run are still closing (TIME_WAIT) */
+   int reuse = 1;
+   setsockopt(sock, SOL_SOCKET, SO_REUSEADDR, (const char *) &reuse, sizeof reuse);
 
    sin.sin_addr.s_addr = htonl(INADDR_ANY);
    sin.sin_port = htons(PORT);
@@ -219,10 +294,11 @@ static int read_client(SOCKET sock, char *buffer)
 
 static void write_client(SOCKET sock, const char *buffer)
 {
-   if(send(sock, buffer, strlen(buffer), 0) < 0)
+   /* a failing send must not stop the server : the client will be removed when its
+      socket is seen closed (recv returns 0) */
+   if(send(sock, buffer, strlen(buffer), MSG_NOSIGNAL) < 0)
    {
       perror("send()");
-      exit(errno);
    }
 }
 
