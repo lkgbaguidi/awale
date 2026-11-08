@@ -15,6 +15,7 @@ typedef struct {
 
 void partie_init(Partie* p, int premier);
 int fin_jeu(const Partie* p);
+void ramasser_restantes(Partie* p);
 void afficher_jeu(const Partie* p);
 void tour_de(Partie* p);
 void afficher_vainqueur(const Partie* p);
@@ -31,6 +32,10 @@ int main()
         printf("\nTour du joueur %d\n", partie.courant + 1);
         tour_de(&partie);
     }
+
+    // fin par blocage (et pas par 25 points) : chacun garde les graines de son camp
+    if (partie.points[0] < 25 && partie.points[1] < 25)
+        ramasser_restantes(&partie);
 
     afficher_jeu(&partie);
     afficher_vainqueur(&partie);
@@ -58,6 +63,14 @@ int camp_vide(const Partie* p, int joueur){
     return est_tout_a_zero(&p->cases[joueur * NB_CASES], NB_CASES);
 }
 
+// Nombre de graines dans le camp d'un joueur
+int graines_du_camp(const Partie* p, int joueur){
+    int total = 0;
+    for (int i = 0; i < NB_CASES; i++)
+        total += p->cases[joueur * NB_CASES + i];
+    return total;
+}
+
 
 void partie_init(Partie* p, int premier){
     for (int i = 0; i < NB_TOTAL; i++)
@@ -68,21 +81,48 @@ void partie_init(Partie* p, int premier){
     p->courant = premier;
 }
 
+// Le coup est jouable si la case n'est pas vide et, quand l'adversaire n'a plus de graines,
+// s'il lui en donne : depuis la case tas, avec graines graines, on atteint le camp
+// adverse seulement si tas + graines >= NB_CASES.
+int coup_valide(const Partie* p, int joueur, int tas){
+    int graines = p->cases[joueur * NB_CASES + tas];
 
-int fin_jeu(const Partie* p){
-    if((p->points[0] >= 25) || (p->points[1] >= 25)
-       || camp_vide(p, 0) || camp_vide(p, 1)){
-        return 1;
+    if (graines == 0)
+        return 0;
+    if (camp_vide(p, 1 - joueur) && tas + graines < NB_CASES)
+        return 0;
+    return 1;
+}
+
+int peut_jouer(const Partie* p, int joueur){
+    for (int tas = 0; tas < NB_CASES; tas++){
+        if (coup_valide(p, joueur, tas))
+            return 1;
     }
-
     return 0;
+}
+
+// La partie finit à 25 points, ou quand le joueur dont c'est le tour ne peut plus jouer
+// (plus de graines, ou impossible de nourrir l'adversaire)
+int fin_jeu(const Partie* p){
+    return p->points[0] >= 25 || p->points[1] >= 25 || !peut_jouer(p, p->courant);
+}
+
+// Chaque joueur garde les graines de son camp
+void ramasser_restantes(Partie* p){
+    for (int j = 0; j < 2; j++){
+        p->points[j] += graines_du_camp(p, j);
+        for (int i = 0; i < NB_CASES; i++)
+            p->cases[j * NB_CASES + i] = 0;
+    }
 }
 
 void afficher_vainqueur(const Partie* p){
     printf("\nFin de la partie : joueur 1 = %d points, joueur 2 = %d points\n", p->points[0], p->points[1]);
 
-    // celui qui a 25 points ou dont l'adversaire n'a plus de graines gagne
-    if ((p->points[0] >= 25) || camp_vide(p, 1))
+    if (p->points[0] == p->points[1])
+        printf("Égalité !\n");
+    else if (p->points[0] > p->points[1])
         printf("Le joueur 1 gagne !\n");
     else
         printf("Le joueur 2 gagne !\n");
@@ -142,9 +182,10 @@ void afficher_jeu(const Partie* p) {
 
 void tour_de(Partie* p){
     int joueur = p->courant;
+    int autre = 1 - joueur;
     int tas = -1;
 
-    // saisie d'une case non vide entre 1 et 6 (dans le camp du joueur courant)
+    // saisie d'une case jouable entre 1 et 6 (dans le camp du joueur courant)
     while (1){
         printf("Quelle case veux-tu jouer (entre 1 et %d) ? ", NB_CASES);
         if (scanf("%d", &tas) != 1){
@@ -161,6 +202,9 @@ void tour_de(Partie* p){
         }
         else if (p->cases[joueur * NB_CASES + tas] == 0){
             printf("Cette case est vide !\n");
+        }
+        else if (!coup_valide(p, joueur, tas)){
+            printf("Ton adversaire n'a plus de graines : tu dois lui en donner !\n");
         }
         else{
             break;
@@ -183,13 +227,21 @@ void tour_de(Partie* p){
         --nbre_saut;
     }
 
-    // capture : dernière graine chez l'adversaire, on prend les cases de 2 ou 3 graines en remontant
-    while (pos >= 0 && camp_de(pos) != joueur && (p->cases[pos] == 2 || p->cases[pos] == 3)){
-        p->points[joueur] += p->cases[pos];
-        p->cases[pos] = 0;
-        --pos;
+    // capture : on remonte depuis la dernière case tant que c'est chez l'adversaire
+    // et qu'il y a 2 ou 3 graines
+    int gain = 0;
+    int i = pos;
+    while (i >= 0 && camp_de(i) == autre && (p->cases[i] == 2 || p->cases[i] == 3)){
+        gain += p->cases[i];
+        --i;
     }
 
-    // au tour de l'autre joueur
-    p->courant = 1 - joueur;
+    // si on prenait toutes les graines de l'adversaire (rafle totale), on ne prend rien
+    if (gain < graines_du_camp(p, autre)){
+        for (int j = pos; j > i; j--)
+            p->cases[j] = 0;
+        p->points[joueur] += gain;
+    }
+
+    p->courant = autre;
 }
