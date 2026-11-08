@@ -4,7 +4,6 @@
 #include <string.h>
 
 #include "server2.h"
-#include "client2.h"
 
 static void init(void)
 {
@@ -71,7 +70,7 @@ static void app(void)
       {
          /* new client */
          SOCKADDR_IN csin = { 0 };
-         size_t sinsize = sizeof csin;
+         socklen_t sinsize = sizeof csin;
          int csock = accept(sock, (SOCKADDR *)&csin, &sinsize);
          if(csock == SOCKET_ERROR)
          {
