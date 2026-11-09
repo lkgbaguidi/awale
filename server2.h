@@ -39,10 +39,17 @@ typedef struct in_addr IN_ADDR;
 #define MSG_NOSIGNAL 0
 #endif
 
+/* texte d'aide : envoyé à l'arrivée et pour une commande inconnue */
+#define COMMANDES "/list /challenge <pseudo> /accept /refuse"
+
 typedef struct
 {
    SOCKET sock;
    char name[BUF_SIZE];
+   /* socket du joueur qui nous a défiés (INVALID_SOCKET s'il n'y en a pas) */
+   SOCKET defi_de;
+   /* socket de notre adversaire si on est en partie (INVALID_SOCKET sinon) */
+   SOCKET adversaire;
 } Client;
 
 static void init(void);
@@ -57,5 +64,11 @@ static void remove_client(Client *clients, int to_remove, int *actual);
 static void clear_clients(Client *clients, int actual);
 static const char *erreur_pseudo(const Client *clients, int actual, const char *pseudo);
 static void traiter_commande(Client *clients, int actual, int index, const char *commande);
+static int trouver_client(const Client *clients, int actual, const char *nom);
+static int trouver_client_par_sock(const Client *clients, int actual, SOCKET sock);
+static void commande_challenge(Client *clients, int actual, int index, const char *nom);
+static void commande_accept(Client *clients, int actual, int index);
+static void commande_refuse(Client *clients, int actual, int index);
+static void oublier_client(Client *clients, int actual, Client parti);
 
 #endif /* guard */

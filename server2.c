@@ -2,11 +2,15 @@
 #include <stdlib.h>
 #include <errno.h>
 #include <string.h>
+#include <time.h>
 
 #include "server2.h"
 
 static void init(void)
 {
+   /* for the random choice of who starts a game */
+   srand(time(NULL));
+
 #ifdef WIN32
    WSADATA wsa;
    int err = WSAStartup(MAKEWORD(2, 2), &wsa);
@@ -110,10 +114,12 @@ static void app(void)
 
          Client c = { csock };
          strncpy(c.name, buffer, BUF_SIZE - 1);
+         c.defi_de = INVALID_SOCKET;
+         c.adversaire = INVALID_SOCKET;
          clients[actual] = c;
          actual++;
 
-         write_client(csock, "Bienvenue ! Commandes disponibles : /list");
+         write_client(csock, "Bienvenue ! Commandes disponibles : " COMMANDES);
          strncpy(buffer, c.name, BUF_SIZE - 1);
          strncat(buffer, " joined !", BUF_SIZE - strlen(buffer) - 1);
          send_message_to_all_clients(clients, c, actual, buffer, 1);
@@ -133,6 +139,7 @@ static void app(void)
                {
                   closesocket(clients[i].sock);
                   remove_client(clients, i, &actual);
+                  oublier_client(clients, actual, client);
                   strncpy(buffer, client.name, BUF_SIZE - 1);
                   strncat(buffer, " disconnected !", BUF_SIZE - strlen(buffer) - 1);
                   send_message_to_all_clients(clients, client, actual, buffer, 1);
@@ -227,12 +234,175 @@ static void traiter_commande(Client *clients, int actual, int index, const char 
       {
          strncat(message, " ", sizeof message - strlen(message) - 1);
          strncat(message, clients[i].name, sizeof message - strlen(message) - 1);
+         if(clients[i].adversaire != INVALID_SOCKET)
+         {
+            strncat(message, "(en partie)", sizeof message - strlen(message) - 1);
+         }
       }
       write_client(clients[index].sock, message);
    }
+   else if(strcmp(commande, "/challenge") == 0)
+   {
+      write_client(clients[index].sock, "Usage : /challenge <pseudo>");
+   }
+   else if(strncmp(commande, "/challenge ", 11) == 0)
+   {
+      commande_challenge(clients, actual, index, commande + 11);
+   }
+   else if(strcmp(commande, "/accept") == 0)
+   {
+      commande_accept(clients, actual, index);
+   }
+   else if(strcmp(commande, "/refuse") == 0)
+   {
+      commande_refuse(clients, actual, index);
+   }
    else
    {
-      write_client(clients[index].sock, "Commande inconnue. Commandes disponibles : /list");
+      write_client(clients[index].sock, "Commande inconnue. Commandes disponibles : " COMMANDES);
+   }
+}
+
+/* index of the client called nom, -1 if nobody has this name */
+static int trouver_client(const Client *clients, int actual, const char *nom)
+{
+   int i = 0;
+   for(i = 0; i < actual; i++)
+   {
+      if(strcmp(clients[i].name, nom) == 0)
+      {
+         return i;
+      }
+   }
+   return -1;
+}
+
+/* index of the client using this socket, -1 if there is none */
+static int trouver_client_par_sock(const Client *clients, int actual, SOCKET sock)
+{
+   int i = 0;
+   for(i = 0; i < actual; i++)
+   {
+      if(clients[i].sock == sock)
+      {
+         return i;
+      }
+   }
+   return -1;
+}
+
+/* /challenge nom : the client at index challenges nom */
+static void commande_challenge(Client *clients, int actual, int index, const char *nom)
+{
+   char message[BUF_SIZE];
+   int cible = trouver_client(clients, actual, nom);
+
+   if(clients[index].adversaire != INVALID_SOCKET)
+   {
+      write_client(clients[index].sock, "ERREUR : vous êtes déjà en partie");
+      return;
+   }
+   if(cible == -1)
+   {
+      snprintf(message, sizeof message, "ERREUR : joueur inconnu : %s", nom);
+      write_client(clients[index].sock, message);
+      return;
+   }
+   if(cible == index)
+   {
+      write_client(clients[index].sock, "ERREUR : vous ne pouvez pas vous défier vous-même");
+      return;
+   }
+   if(clients[cible].adversaire != INVALID_SOCKET)
+   {
+      snprintf(message, sizeof message, "ERREUR : %s est déjà en partie", nom);
+      write_client(clients[index].sock, message);
+      return;
+   }
+   if(clients[cible].defi_de != INVALID_SOCKET)
+   {
+      snprintf(message, sizeof message, "ERREUR : %s a déjà un défi en attente", nom);
+      write_client(clients[index].sock, message);
+      return;
+   }
+
+   /* the challenged client remembers who challenged him */
+   clients[cible].defi_de = clients[index].sock;
+
+   snprintf(message, sizeof message, "Défi envoyé à %s, en attente de sa réponse", nom);
+   write_client(clients[index].sock, message);
+   snprintf(message, sizeof message, "%s vous défie ! Tapez /accept ou /refuse", clients[index].name);
+   write_client(clients[cible].sock, message);
+}
+
+/* /accept : the client at index accepts the challenge he received */
+static void commande_accept(Client *clients, int actual, int index)
+{
+   char message[BUF_SIZE];
+   int defieur = trouver_client_par_sock(clients, actual, clients[index].defi_de);
+
+   if(defieur == -1)
+   {
+      write_client(clients[index].sock, "ERREUR : aucun défi en attente");
+      return;
+   }
+   if(clients[defieur].adversaire != INVALID_SOCKET)
+   {
+      clients[index].defi_de = INVALID_SOCKET;
+      snprintf(message, sizeof message, "ERREUR : %s est déjà en partie", clients[defieur].name);
+      write_client(clients[index].sock, message);
+      return;
+   }
+
+   /* both players are now opponents, and a pending challenge is no longer possible */
+   clients[index].adversaire = clients[defieur].sock;
+   clients[defieur].adversaire = clients[index].sock;
+   clients[index].defi_de = INVALID_SOCKET;
+   clients[defieur].defi_de = INVALID_SOCKET;
+
+   /* random choice of who starts */
+   const char *premier = (rand() % 2 == 0) ? clients[defieur].name : clients[index].name;
+   snprintf(message, sizeof message, "Partie lancée : %s contre %s. %s commence !",
+            clients[defieur].name, clients[index].name, premier);
+   write_client(clients[defieur].sock, message);
+   write_client(clients[index].sock, message);
+}
+
+/* /refuse : the client at index refuses the challenge he received */
+static void commande_refuse(Client *clients, int actual, int index)
+{
+   char message[BUF_SIZE];
+   int defieur = trouver_client_par_sock(clients, actual, clients[index].defi_de);
+
+   if(defieur == -1)
+   {
+      write_client(clients[index].sock, "ERREUR : aucun défi en attente");
+      return;
+   }
+   clients[index].defi_de = INVALID_SOCKET;
+
+   snprintf(message, sizeof message, "%s a refusé votre défi", clients[index].name);
+   write_client(clients[defieur].sock, message);
+   write_client(clients[index].sock, "Défi refusé");
+}
+
+/* parti has just left : nobody must keep a link to its (now closed) socket */
+static void oublier_client(Client *clients, int actual, Client parti)
+{
+   char message[BUF_SIZE];
+   int i = 0;
+   for(i = 0; i < actual; i++)
+   {
+      if(clients[i].defi_de == parti.sock)
+      {
+         clients[i].defi_de = INVALID_SOCKET;
+      }
+      if(clients[i].adversaire == parti.sock)
+      {
+         clients[i].adversaire = INVALID_SOCKET;
+         snprintf(message, sizeof message, "%s s'est déconnecté : la partie est annulée", parti.name);
+         write_client(clients[i].sock, message);
+      }
    }
 }
 
@@ -296,7 +466,11 @@ static void write_client(SOCKET sock, const char *buffer)
 {
    /* a failing send must not stop the server : the client will be removed when its
       socket is seen closed (recv returns 0) */
-   if(send(sock, buffer, strlen(buffer), MSG_NOSIGNAL) < 0)
+   /* TCP is a stream : two messages sent quickly arrive glued together. Each message ends
+      with '\n' so that the client can tell them apart */
+   char message[BUF_SIZE + 1];
+   snprintf(message, sizeof message, "%s\n", buffer);
+   if(send(sock, message, strlen(message), MSG_NOSIGNAL) < 0)
    {
       perror("send()");
    }

@@ -83,7 +83,8 @@ static void app(const char *address, const char *name)
             printf("Server disconnected !\n");
             break;
          }
-         puts(buffer);
+         /* the server ends each message with '\n' : no puts(), it would add a second one */
+         printf("%s", buffer);
       }
    }
 
