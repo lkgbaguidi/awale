@@ -27,12 +27,24 @@ Le serveur écoute sur le port 1977 :
 
 Taper une touche puis Entrée dans le terminal du serveur l'arrête.
 
-Chaque joueur lance un client avec l'adresse du serveur et son pseudo :
+Chaque joueur lance un client avec l'adresse du serveur, son pseudo et son mot de passe :
 
-    ./client 127.0.0.1 alice
+    ./client 127.0.0.1 alice secret
 
 Le pseudo ne doit pas être vide, ne doit pas contenir d'espace, doit faire moins de 32 caractères
-et ne doit pas déjà être utilisé. Ctrl+D quitte le client.
+et ne doit pas déjà être connecté. Mêmes règles pour le mot de passe. Ctrl+D quitte le client.
+
+## Comptes
+
+Le premier message du client est `pseudo motdepasse`. Le serveur cherche le pseudo dans
+`comptes.txt` (une ligne `pseudo motdepasse` par compte) :
+
+- pseudo inconnu : le compte est créé ;
+- pseudo connu et bon mot de passe : le joueur entre ;
+- mauvais mot de passe : `ERREUR : mot de passe incorrect` et la connexion est fermée.
+
+La bio, les amis et le mode privé d'un compte sont sauvegardés dans `profil_<pseudo>.txt`
+après chaque modification, et rechargés à la connexion suivante.
 
 ## Commandes du client
 
@@ -102,8 +114,9 @@ annulés.
 
 ## Limites
 
-- La bio, les amis et le mode privé sont gardés en mémoire seulement : ils sont perdus quand
-  le joueur se déconnecte.
+- Le mot de passe circule en clair sur le réseau (TCP ne chiffre rien ; c'est le rôle de
+  SSH/TLS) et il est stocké en clair dans `comptes.txt` (il faudrait stocker une empreinte,
+  par exemple avec `crypt()`). Il est aussi visible dans les arguments de la commande.
 - Un joueur déconnecté ne peut pas reprendre sa partie.
 
 ## Fichiers
@@ -112,3 +125,6 @@ annulés.
 - `awale.c` : jeu local en terminal
 - `server2.c`, `server2.h` : serveur (connexions, commandes, parties)
 - `client2.c`, `client2.h` : client
+
+Fichiers créés par le serveur dans le dossier où il est lancé : `comptes.txt`,
+`profil_<pseudo>.txt` et `partie_<numéro>.txt`.

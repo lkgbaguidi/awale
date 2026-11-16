@@ -154,15 +154,18 @@ static void write_server(SOCKET sock, const char *buffer)
 
 int main(int argc, char **argv)
 {
-   if(argc < 3)
+   if(argc < 4)
    {
-      printf("Usage : %s [address] [pseudo]\n", argv[0]);
+      printf("Usage : %s [address] [pseudo] [motdepasse]\n", argv[0]);
       return EXIT_FAILURE;
    }
 
    init();
 
-   app(argv[1], argv[2]);
+   /* first message sent to the server : "pseudo motdepasse" */
+   char identite[BUF_SIZE];
+   snprintf(identite, sizeof identite, "%s %s", argv[2], argv[3]);
+   app(argv[1], identite);
 
    end();
 

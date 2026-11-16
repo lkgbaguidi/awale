@@ -58,10 +58,9 @@ typedef struct
    char name[BUF_SIZE];
    /* socket du joueur qui nous a défiés (INVALID_SOCKET s'il n'y en a pas) */
    SOCKET defi_de;
-   /* socket de notre adversaire si on est en partie (INVALID_SOCKET sinon) */
-   SOCKET adversaire;
-   /* indice (dans le tableau des parties) de la partie qu'on joue ou qu'on observe, -1 sinon */
+   /* indice (dans le tableau des parties) de la partie qu'on joue, -1 si on ne joue pas */
    int partie;
+   /* indice de la partie qu'on observe, -1 si on n'observe rien */
    int observe;
    /* bio : jusqu'à LIGNES_BIO lignes */
    char bio[LIGNES_BIO][TAILLE_LIGNE_BIO];
@@ -96,6 +95,9 @@ static void send_message_to_all_clients(Client *clients, Client client, int actu
 static void remove_client(Client *clients, int to_remove, int *actual);
 static void clear_clients(Client *clients, int actual);
 static const char *erreur_pseudo(const Client *clients, int actual, const char *pseudo);
+static const char *verifier_compte(const char *pseudo, const char *mdp);
+static void sauver_profil(const Client *c);
+static void charger_profil(Client *c);
 static void traiter_commande(Client *clients, int actual, int index, const char *commande);
 static int trouver_client(const Client *clients, int actual, const char *nom);
 static int trouver_client_par_sock(const Client *clients, int actual, SOCKET sock);

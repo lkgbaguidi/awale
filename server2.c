@@ -93,7 +93,7 @@ static void app(void)
             continue;
          }
 
-         /* after connecting the client sends its name */
+         /* after connecting the client sends its name and its password */
          if(read_client(csock, buffer) == 0)
          {
             /* disconnected */
@@ -101,8 +101,22 @@ static void app(void)
             continue;
          }
 
-         /* the name must be valid and not already used */
+         /* the first message is "pseudo motdepasse" : we cut it at the first space */
+         char *espace = strchr(buffer, ' ');
+         if(espace == NULL)
+         {
+            write_client(csock, "ERREUR : il faut un pseudo et un mot de passe");
+            closesocket(csock);
+            continue;
+         }
+         *espace = 0;   /* now buffer is the pseudo and espace + 1 the password */
+
+         /* the name must be valid and not already used, then the password must match */
          const char *erreur = erreur_pseudo(clients, actual, buffer);
+         if(erreur == NULL)
+         {
+            erreur = verifier_compte(buffer, espace + 1);
+         }
          if(erreur != NULL)
          {
             write_client(csock, erreur);
@@ -118,9 +132,9 @@ static void app(void)
          Client c = { csock };
          strncpy(c.name, buffer, BUF_SIZE - 1);
          c.defi_de = INVALID_SOCKET;
-         c.adversaire = INVALID_SOCKET;
          c.partie = -1;
          c.observe = -1;
+         charger_profil(&c);   /* bio, friends and private mode saved by a previous connection */
          clients[actual] = c;
          actual++;
 
@@ -243,6 +257,111 @@ static const char *erreur_pseudo(const Client *clients, int actual, const char *
    return NULL;
 }
 
+/* Accounts are kept in comptes.txt, one line per account : "pseudo motdepasse".
+   Unknown pseudo : the account is created. Known pseudo : the password must match.
+   Returns NULL if the client can come in, otherwise the message to send to him. */
+static const char *verifier_compte(const char *pseudo, const char *mdp)
+{
+   char p[TAILLE_PSEUDO], m[TAILLE_PSEUDO];
+   FILE *f = NULL;
+
+   if(mdp[0] == 0 || strlen(mdp) >= TAILLE_PSEUDO || strchr(mdp, ' ') != NULL)
+   {
+      return "ERREUR : mot de passe invalide (pas vide, pas d'espace, 31 caractères max)";
+   }
+
+   f = fopen("comptes.txt", "r");
+   if(f != NULL)   /* NULL the first time : the file does not exist yet */
+   {
+      while(fscanf(f, "%31s %31s", p, m) == 2)
+      {
+         if(strcmp(p, pseudo) == 0)
+         {
+            fclose(f);
+            if(strcmp(m, mdp) == 0)
+            {
+               return NULL;
+            }
+            return "ERREUR : mot de passe incorrect";
+         }
+      }
+      fclose(f);
+   }
+
+   /* unknown pseudo : we create the account */
+   f = fopen("comptes.txt", "a");
+   if(f == NULL)
+   {
+      return "ERREUR : impossible de créer le compte";
+   }
+   fprintf(f, "%s %s\n", pseudo, mdp);
+   fclose(f);
+   return NULL;
+}
+
+/* The profile of an account is kept in profil_<pseudo>.txt, one piece of information per line :
+      prive 1
+      ami bob
+      bio J'aime l'awalé
+   It is written again after each change (/bio, /clearbio, /friend, /private). */
+static void sauver_profil(const Client *c)
+{
+   char nom_fichier[64];
+   int i = 0;
+   FILE *f = NULL;
+
+   snprintf(nom_fichier, sizeof nom_fichier, "profil_%s.txt", c->name);
+   f = fopen(nom_fichier, "w");
+   if(f == NULL)
+   {
+      return;
+   }
+   fprintf(f, "prive %d\n", c->prive);
+   for(i = 0; i < c->nb_amis; i++)
+   {
+      fprintf(f, "ami %s\n", c->amis[i]);
+   }
+   for(i = 0; i < c->nb_lignes_bio; i++)
+   {
+      fprintf(f, "bio %s\n", c->bio[i]);
+   }
+   fclose(f);
+}
+
+/* reads back the profile written by sauver_profil (nothing happens for a new account) */
+static void charger_profil(Client *c)
+{
+   char nom_fichier[64];
+   char ligne[BUF_SIZE];
+   FILE *f = NULL;
+
+   snprintf(nom_fichier, sizeof nom_fichier, "profil_%s.txt", c->name);
+   f = fopen(nom_fichier, "r");
+   if(f == NULL)
+   {
+      return;
+   }
+   while(fgets(ligne, sizeof ligne, f) != NULL)
+   {
+      ligne[strcspn(ligne, "\n")] = 0;   /* remove the '\n' kept by fgets */
+      if(strncmp(ligne, "prive ", 6) == 0)
+      {
+         c->prive = atoi(ligne + 6);
+      }
+      else if(strncmp(ligne, "ami ", 4) == 0 && c->nb_amis < MAX_AMIS)
+      {
+         strncpy(c->amis[c->nb_amis], ligne + 4, TAILLE_PSEUDO - 1);
+         c->nb_amis++;
+      }
+      else if(strncmp(ligne, "bio ", 4) == 0 && c->nb_lignes_bio < LIGNES_BIO)
+      {
+         strncpy(c->bio[c->nb_lignes_bio], ligne + 4, TAILLE_LIGNE_BIO - 1);
+         c->nb_lignes_bio++;
+      }
+   }
+   fclose(f);
+}
+
 static void traiter_commande(Client *clients, int actual, int index, const char *commande)
 {
    char message[BUF_SIZE];
@@ -256,7 +375,7 @@ static void traiter_commande(Client *clients, int actual, int index, const char 
       {
          strncat(message, " ", sizeof message - strlen(message) - 1);
          strncat(message, clients[i].name, sizeof message - strlen(message) - 1);
-         if(clients[i].adversaire != INVALID_SOCKET)
+         if(clients[i].partie != -1)
          {
             strncat(message, "(en partie)", sizeof message - strlen(message) - 1);
          }
@@ -335,6 +454,7 @@ static void traiter_commande(Client *clients, int actual, int index, const char 
    else if(strcmp(commande, "/clearbio") == 0)
    {
       clients[index].nb_lignes_bio = 0;
+      sauver_profil(&clients[index]);
       write_client(clients[index].sock, "Bio effacée");
    }
    else if(strncmp(commande, "/showbio ", 9) == 0)
@@ -401,7 +521,7 @@ static void commande_challenge(Client *clients, int actual, int index, const cha
    char message[BUF_SIZE];
    int cible = trouver_client(clients, actual, nom);
 
-   if(clients[index].adversaire != INVALID_SOCKET)
+   if(clients[index].partie != -1)
    {
       write_client(clients[index].sock, "ERREUR : vous êtes déjà en partie");
       return;
@@ -417,7 +537,7 @@ static void commande_challenge(Client *clients, int actual, int index, const cha
       write_client(clients[index].sock, "ERREUR : vous ne pouvez pas vous défier vous-même");
       return;
    }
-   if(clients[cible].adversaire != INVALID_SOCKET)
+   if(clients[cible].partie != -1)
    {
       snprintf(message, sizeof message, "ERREUR : %s est déjà en partie", nom);
       write_client(clients[index].sock, message);
@@ -450,7 +570,7 @@ static void commande_accept(Client *clients, int actual, int index)
       write_client(clients[index].sock, "ERREUR : aucun défi en attente");
       return;
    }
-   if(clients[defieur].adversaire != INVALID_SOCKET)
+   if(clients[defieur].partie != -1)
    {
       clients[index].defi_de = INVALID_SOCKET;
       snprintf(message, sizeof message, "ERREUR : %s est déjà en partie", clients[defieur].name);
@@ -470,9 +590,7 @@ static void commande_accept(Client *clients, int actual, int index)
       return;
    }
 
-   /* both players are now opponents, and a pending challenge is no longer possible */
-   clients[index].adversaire = clients[defieur].sock;
-   clients[defieur].adversaire = clients[index].sock;
+   /* a pending challenge is no longer possible for the two players */
    clients[index].defi_de = INVALID_SOCKET;
    clients[defieur].defi_de = INVALID_SOCKET;
 
@@ -537,22 +655,16 @@ static void commande_refuse(Client *clients, int actual, int index)
    write_client(clients[index].sock, "Défi refusé");
 }
 
-/* parti has just left : nobody must keep a link to its (now closed) socket */
+/* parti has just left : nobody must keep a pending challenge from its (now closed) socket.
+   (its game, if any, was already ended by abandonner_partie) */
 static void oublier_client(Client *clients, int actual, Client parti)
 {
-   char message[BUF_SIZE];
    int i = 0;
    for(i = 0; i < actual; i++)
    {
       if(clients[i].defi_de == parti.sock)
       {
          clients[i].defi_de = INVALID_SOCKET;
-      }
-      if(clients[i].adversaire == parti.sock)
-      {
-         clients[i].adversaire = INVALID_SOCKET;
-         snprintf(message, sizeof message, "%s s'est déconnecté : la partie est annulée", parti.name);
-         write_client(clients[i].sock, message);
       }
    }
 }
@@ -642,7 +754,6 @@ static void terminer_partie(Client *clients, int actual, int n, const char *resu
       c = trouver_client_par_sock(clients, actual, p->joueurs[i]);
       if(c != -1)
       {
-         clients[c].adversaire = INVALID_SOCKET;
          clients[c].partie = -1;
          write_client(clients[c].sock, message);
       }
@@ -673,7 +784,6 @@ static void abandonner_partie(Client *clients, int actual, int index, int deconn
       /* his socket is closed : we don't write to it anymore */
       p->joueurs[moi] = INVALID_SOCKET;
       clients[index].partie = -1;
-      clients[index].adversaire = INVALID_SOCKET;
       snprintf(message, sizeof message, "%s s'est déconnecté : %s gagne par forfait !", p->noms[moi], p->noms[1 - moi]);
    }
    else
@@ -928,6 +1038,7 @@ static void commande_bio(Client *clients, int index, const char *ligne)
    strncpy(c->bio[c->nb_lignes_bio], ligne, TAILLE_LIGNE_BIO - 1);
    c->bio[c->nb_lignes_bio][TAILLE_LIGNE_BIO - 1] = 0;
    c->nb_lignes_bio++;
+   sauver_profil(c);
    write_client(c->sock, "Ligne ajoutée à votre bio");
 }
 
@@ -1002,6 +1113,7 @@ static void commande_friend(Client *clients, int index, const char *nom)
    strncpy(c->amis[c->nb_amis], nom, TAILLE_PSEUDO - 1);
    c->amis[c->nb_amis][TAILLE_PSEUDO - 1] = 0;
    c->nb_amis++;
+   sauver_profil(c);
    snprintf(message, sizeof message, "%s ajouté à vos amis", nom);
    write_client(c->sock, message);
 }
@@ -1009,6 +1121,7 @@ static void commande_friend(Client *clients, int index, const char *nom)
 static void commande_private(Client *clients, int index)
 {
    clients[index].prive = !clients[index].prive;
+   sauver_profil(&clients[index]);
    if(clients[index].prive)
    {
       write_client(clients[index].sock, "Mode privé activé : seuls vos amis peuvent observer vos parties");
